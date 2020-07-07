@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'My Org consolidated ELB report'
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'Required'
+      Parameters:
+      - ConsolidatedOutputS3
+    ParameterGroups:
+    - Label:
+        default: 'Defaults'
+      Parameters:
+      - S3KeyPrefix
+      - ELBLambdaCron
+#Input Parameters
+Parameters:
+  ConsolidatedOutputS3:
+    Description: 'Consolidated S3 bucket to send output '
+    Type: String
+  S3KeyPrefix:
+    Description: 'The S3 Key prefix added'
+    Type: String
+    Default: 'elb'
+  ELBLambdaCron:
+    Description: 'ELB Lambda Cron format "cron(0 18 ? * SUN *)"'
+    Type: String
+    Default: 'cron(0 18 * * ? *)'  
+#Build AWs resources
+Resources:
+  ELBListLambdaExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: ['sts:AssumeRole']
+            Principal:
+              Service: [lambda.amazonaws.com]
+      Path: /
+      Policies:
+        - PolicyName: lambda-execution-policy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: 'elasticloadbalancing:DescribeLoadBalancers'
+                Resource: '*'                
+              - Effect: Allow
+                Action: 'ec2:DescribeRegions'
+                Resource: '*'
+              - Effect: Allow
+                Action: "logs:*"
+                Resource: "*"
+  ELBListLambda:
+    Type: AWS::Lambda::Function
+    Properties: 
+      Description: List ELbs in the account
+      Environment:
+        Variables: 
+          CONSOLIDATEDOOUTPUTS3 : !Ref ConsolidatedOutputS3
+          AWSACCOUNTID: !Ref AWS::AccountId
+          S3KEYPREFIX: !Ref S3KeyPrefix
+      Handler: index.lambda_handler
+      MemorySize: 512
+      Role: !GetAtt ELBListLambdaExecRole.Arn
+      Runtime: python3.7
+      Timeout: 900
+      Code: 
+        ZipFile: |
+          import csv
+          import boto3
+          import os
+          from datetime import datetime
+          from botocore.exceptions import ClientError
+
+          # Env Var
+          AccountId = os.environ['AWSACCOUNTID']
+          consolidatedOutputS3 = os.environ['CONSOLIDATEDOOUTPUTS3']
+          prefix = os.environ['S3KEYPREFIX']
+          # Global Var
+          lbList = [['AccountId','Region','Name','Type','BackendInstanceCount','Schema']]
+
+          def listRegions():
+            """Fetchs the AWs regions"""
+            try:
+              regionList = []
+              ec2 = boto3.client('ec2')
+              response = ec2.describe_regions()
+              for region in response['Regions']:
+                regionList.append(region['RegionName'])
+              return regionList
+            except Exception as e:
+              raise e
+
+          def listELB(region):
+            """list ELB in the regions"""
+            try:
+              global lbList
+              elbClient = boto3.client('elb', region_name=region)
+              paginator = elbClient.get_paginator('describe_load_balancers')
+              page_iterator = paginator.paginate(PaginationConfig={'PageSize': 400})
+              for page in page_iterator:
+                for lb in page['LoadBalancerDescriptions']:
+                  item = [AccountId,region,lb['LoadBalancerName'],'clb',str(len(lb['Instances'])),lb['Scheme']]
+                  lbList.append(item)
+            except Exception as e:
+              raise e
+
+          def uploadToS3(tmpOutFilePath, key):
+            """docstring for uploadToS3"""
+            try:
+              s3 = boto3.resource('s3')
+              bucket = s3.Bucket(consolidatedOutputS3)
+              bucket.upload_file(tmpOutFilePath, key)
+            except Exception as e:
+              raise e
+
+          def lambda_handler(event, context):
+            try:
+              global lbList
+              tmpOutFilePath = '/tmp/output.csv'
+              regionList = listRegions()
+              for region in regionList:
+                listELB(region)
+              print(lbList)
+              with open(tmpOutFilePath, 'w', newline='') as result_file:
+                  wr = csv.writer(result_file)
+                  wr.writerows(lbList)
+              # Upload in date format
+              x = datetime.today()
+              key = prefix + '/year='+ str(x.year) + '/month=' + str(x.month) + '/day='+ str(x.day) \
+                + '/elb-' + AccountId + '-' + x.strftime('%Y%m%d') + '.csv'
+              uploadToS3(tmpOutFilePath, key)
+              # Clean up
+              os.remove(tmpOutFilePath)
+              lbList = []
+              
+              return {
+                'statusCode': 200,
+                'body': 'Execution complete. Check CloudWatch Logs for execution detail'
+              }
+            except Exception as e:
+              raise e
+  ELBListLambdaScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "ELBListLambda ScheduledRule"
+      ScheduleExpression: !Ref ELBLambdaCron
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: !GetAtt ELBListLambda.Arn
+          Id: "ELBListLambdaFunctionV1"
+  PermissionForEventsToInvokeELBListLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref ELBListLambda
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt ELBListLambdaScheduledRule.Arn
+  ElbGlueDB:
+    Type: AWS::Glue::Database
+    Properties: 
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput: 
+        Description: 'Elb DB'
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
