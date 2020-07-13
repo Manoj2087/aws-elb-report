@@ -27,7 +27,7 @@ Parameters:
     Type: String
     Default: 'cron(0 18 * * ? *)'  
   ELBGlueCrawlerCron:
-    Description: 'ELB Glue Crawler Cron format "cron(0 18 ? * SUN *)" Note: Schedule Crawler aleast an hour after Lambda'
+    Description: 'ELB Glue Crawler Cron format "cron(0 20 ? * SUN *)" Note: Schedule Crawler aleast 2 hour after Lambda'
     Type: String
     Default: 'cron(0 20 * * ? *)'  
 #Build AWs resources
@@ -48,6 +48,7 @@ Resources:
           - 
             Action: 
               - 's3:PutObject'
+              - 's3:PutObjectAcl'
             Effect: 'Allow'
             Resource: !Join ['', ['arn:aws:s3:::', !Ref ConsolidatedOutputS3, '/', !Ref S3KeyPrefix, '/*']]
             Principal: '*'
@@ -71,13 +72,21 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: 'elasticloadbalancing:DescribeLoadBalancers'
-                Resource: '*'                
+                Resource: '*'
               - Effect: Allow
                 Action: 'ec2:DescribeRegions'
                 Resource: '*'
               - Effect: Allow
                 Action: "logs:*"
                 Resource: "*"
+        - PolicyName: s3-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 's3:PutObject'
+                  - 's3:PutObjectAcl'
+                Resource: !Join ['', ['arn:aws:s3:::', !Ref ConsolidatedOutputS3, '/', !Ref S3KeyPrefix, '/*']]
   ELBListLambda:
     Type: AWS::Lambda::Function
     Properties: 
@@ -88,7 +97,7 @@ Resources:
           AWSACCOUNTID: !Ref AWS::AccountId
           S3KEYPREFIX: !Ref S3KeyPrefix
       Handler: index.lambda_handler
-      MemorySize: 512
+      MemorySize: 256
       Role: !GetAtt ELBListLambdaExecRole.Arn
       Runtime: python3.7
       Timeout: 900
@@ -138,7 +147,7 @@ Resources:
             try:
               s3 = boto3.resource('s3')
               bucket = s3.Bucket(consolidatedOutputS3)
-              bucket.upload_file(tmpOutFilePath, key)
+              bucket.upload_file(tmpOutFilePath, key, ExtraArgs={'ACL': 'bucket-owner-full-control'})
             except Exception as e:
               raise e
 
