@@ -1,4 +1,7 @@
 # aws-elb-report
+This solution is used to consolidate AWS Classic loadbalancer(CLB) information accross all your AWS accounts and regions linked to your AWS Organization master account to a central S3. Which can then be queried using AWS Athena.
+
+This solution uses a combination of AWS services such as S3, Lambda, Glue, Athena and cloud formation.
 
 ## Prerequisite
 1. AWS accounts setup in AWS Orgnization
