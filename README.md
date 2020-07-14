@@ -5,7 +5,7 @@
 1. Access to deploy cloudformation stack and stackset on the AWS organization root/master account. 
 
 ## Architecture
-
+![Architecture](document/aws-elb-report-architecture.png)
 
 ## Deployment guide
 ### Deploy root Account Cloud formation
